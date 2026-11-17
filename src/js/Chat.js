@@ -2,9 +2,14 @@ import ChatAPI from "./api/ChatAPI.js";
 
 export default class Chat {
   constructor(container) {
+    if (!container) {
+      throw new Error('Контейнер "#root" не найден');
+    }
+
     this.container = container;
     this.api = new ChatAPI();
     this.websocket = null;
+    this.user = null;
   }
 
   init() {
@@ -54,7 +59,7 @@ export default class Chat {
 
         <div class="chat__connect">
           <span class="chat__username"></span>
-          <button class="chat__exit">Выйти</button>
+          <button class="chat__exit" type="button">Выйти</button>
         </div>
 
         <div class="chat__container">
@@ -98,12 +103,40 @@ export default class Chat {
     this.exitButton = this.container.querySelector(".chat__exit");
   }
 
-  connect() {
-    this.websocket = new Websocket("ws://localhost:8080/ws");
-  }
-
   registerEvents() {
     this.modalForm.addEventListener("submit", this.onEnterChatHandler);
+    this.exitButton.addEventListener("click", this.onExitChatHandler);
+    this.messageForm.addEventListener("submit", this.onSendMessageHandler);
+  }
+
+  connect() {
+    this.websocket = new WebSocket("ws://localhost:3000");
+
+    this.websocket.addEventListener("open", () => {
+      console.log("WebSocket: соединение установлено");
+    });
+
+    this.websocket.addEventListener("message", (event) => {
+      try {
+        const data = JSON.parse(event.data);
+
+        if (Array.isArray(data)) {
+          this.renderUsers(data);
+        } else if (data.type === "send") {
+          this.renderMessage(data);
+        }
+      } catch (error) {
+        console.error("Ошибка обработки сообщения:", error);
+      }
+    });
+
+    this.websocket.addEventListener("error", (event) => {
+      console.error("WebSocket: ошибка соединения", event);
+    });
+
+    this.websocket.addEventListener("close", () => {
+      console.log("WebSocket: соединение закрыто");
+    });
   }
 
   subscribeOnEvents() {}
@@ -118,10 +151,14 @@ export default class Chat {
       return;
     }
 
+    this.hint.textContent = "";
+
     try {
       const response = await this.api.create({ name });
 
-      console.log(response);
+      if (!response?.user) {
+        throw new Error(response?.message || "Не удалось войти в чат");
+      }
 
       this.user = response.user;
 
@@ -133,10 +170,94 @@ export default class Chat {
       this.connect();
     } catch (error) {
       this.hint.textContent = error.message;
+      console.error(error);
     }
   };
 
-  sendMessage() {}
+  onExitChatHandler = () => {
+    if (this.websocket?.readyState === WebSocket.OPEN) {
+      this.websocket.send(
+        JSON.stringify({
+          type: "exit",
+          user: this.user,
+        })
+      );
+    }
 
-  renderMessage() {}
+    if (this.websocket) {
+      this.websocket.close();
+      this.websocket = null;
+    }
+
+    this.chatElement.classList.add("hidden");
+    this.modal.classList.add("active");
+
+    this.nameInput.value = "";
+    this.messagesContainer.innerHTML = "";
+    this.usersContainer.innerHTML = "";
+    this.user = null;
+  };
+
+  sendMessage(message) {
+    if (!this.websocket || this.websocket.readyState !== WebSocket.OPEN) {
+      console.error("WebSocket-соединение не установлено");
+      return false;
+    }
+
+    this.websocket.send(
+      JSON.stringify({
+        type: "send",
+        user: this.user,
+        message,
+      })
+    );
+
+    return true;
+  }
+
+  renderMessage(data) {
+    const messageElement = document.createElement("div");
+    messageElement.classList.add("chat__message");
+
+    const username = document.createElement("span");
+    username.classList.add("chat__message-username");
+    username.textContent = data.user?.name || "Пользователь";
+
+    const messageText = document.createElement("p");
+    messageText.classList.add("chat__message-text");
+    messageText.textContent = data.message;
+
+    messageElement.append(username, messageText);
+    this.messagesContainer.append(messageElement);
+
+    messageElement.scrollIntoView({ behavior: "smooth" });
+  }
+
+  renderUsers(users) {
+    this.usersContainer.innerHTML = "";
+
+    users.forEach((user) => {
+      const userElement = document.createElement("div");
+      userElement.classList.add("chat__user");
+      userElement.textContent = user.name;
+
+      this.usersContainer.append(userElement);
+    });
+  }
+
+  onSendMessageHandler = (e) => {
+    e.preventDefault();
+
+    const message = this.messageInput.value.trim();
+
+    if (!message) {
+      return;
+    }
+
+    const isSent = this.sendMessage(message);
+
+    if (isSent) {
+      this.messageInput.value = "";
+    }
+  };
 }
